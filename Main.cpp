@@ -2,10 +2,11 @@
 #include "SFML/Graphics.hpp"    
 #include <Windows.h>
 #include <Dwmapi.h>
+#include <ShObjIdl.h>
 
 #pragma comment (lib, "Dwmapi.lib")
 
-enum animation_set {
+enum animation_default {
     walking = 0,
     running = 130,
     breeze = 260,
@@ -28,23 +29,73 @@ enum animation_set {
     swimming = 2440
 };
 
-int main(int argc, char** argv)  {    
-    int animation = swimming;
+enum animation_modern {
+    gumi = 67,
+    gumi_running = 130,
+    gumi_breeze = 260,
+    gumi_bicycle = 385,
+    gumi_wave = 520,
+    gumi_fallover = 650,
+    cirno_hold = 1330,
+    cirno_sway = 1590,
+    cirno_jump = 1795,
+    cirno_wave = 2100,
+    cirno_zombie = 2350,
+    cirno_spin = 2645,
+    green = 1680,
+    pink = 1818,
+    red = 1945,
+    orange = 2075,
+};
 
-    int rate = 125;
 
-    sf::RenderWindow renderWindow(sf::VideoMode(110, 125), "Waifu Dance", sf::Style::None);
+int main(int argc, char** argv)  { 
+    //configuration options
+    int animation = cirno_hold;
+    int rate = 105;
+    int frames = 8;
+    int sheet_width = 880;
+    int sheet_width2 = sheet_width*2;
+    int rectangle_left = sheet_width2 / frames;
+    char stylesheet[] = "images/sheet2.png";
+    
+    // WINDOW
+    sf::RenderWindow renderWindow(sf::VideoMode(220, 205), "Waifu Dance", sf::Style::None);
+
+    HWND hwnd = renderWindow.getSystemHandle();
 
     MARGINS margins;
     margins.cxLeftWidth = -1;
-
-    SetWindowLong(renderWindow.getSystemHandle(), GWL_STYLE, WS_POPUP | WS_VISIBLE);
-    DwmExtendFrameIntoClientArea(renderWindow.getSystemHandle(), &margins);
     
+    SetWindowLong(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+    DwmExtendFrameIntoClientArea(hwnd, &margins);
+    
+    SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+
+    // Remove icon from taskbar
+    ITaskbarList* pTaskList = NULL;
+    HRESULT initRet = CoInitialize(NULL);
+    HRESULT createRet = CoCreateInstance(CLSID_TaskbarList,
+        NULL,
+        CLSCTX_INPROC_SERVER,
+        IID_ITaskbarList,
+        (LPVOID*)&pTaskList);
+
+    if (createRet == S_OK)
+    {
+
+        pTaskList->DeleteTab(hwnd);
+
+        pTaskList->Release();
+    }
+
+    CoUninitialize();
+    
+    // Render loop and animation settings
     sf::Event event;
     sf::Texture texture;
-    sf::IntRect rectSource(0, animation, 110, 124);
-    texture.loadFromFile("images/sheet1.png");
+    sf::IntRect rectSource(0, animation, 220, 205);
+    texture.loadFromFile(stylesheet);
     
     sf::Sprite sprite(texture, rectSource);
     sf::Clock clock;
@@ -75,9 +126,9 @@ int main(int argc, char** argv)  {
         
         if (clock.getElapsedTime().asMilliseconds() >= rate) {
             sprite.setTextureRect(rectSource);
-            rectSource.left += 110;
+            rectSource.left += 220;
 
-            if (rectSource.left == 880) {
+            if (rectSource.left == 1760) {
                 rectSource.left = 0;
             } 
             
