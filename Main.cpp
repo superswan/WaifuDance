@@ -12,8 +12,11 @@
 #define WM_TRAYICON ( WM_USER + 1 )
 
 UINT WM_TASKBAR = 0;
-
+NOTIFYICONDATA niData;
+HICON appIcon = (HICON)LoadImage(NULL, L"icon.ico", IMAGE_ICON, 0, 0, LR_LOADFROMFILE);
 HMENU Hmenu;
+
+bool done = 0;
 
 // Animations (rectSource.top)
 enum animation_default {
@@ -59,20 +62,12 @@ enum animation_modern {
 };
 
 LRESULT CALLBACK WinProc(HWND, UINT, WPARAM, LPARAM);
-
+void displayAnimation();
+void minimize(HWND hWnd);
+void restore(HWND hWnd);
+void InitNotifyIconData(HWND hWnd);
 
 int main(int argc, char** argv) {
-	//configuration options
-	int animation = cirno_stepping;
-	int sprite_width = 220;
-	int sprite_length = 256;
-	int rate = 105;
-	int frames = 8;
-	int sheet_width = 880;
-	int sheet_width2x = sheet_width * 2;
-	int rectangle_left = sheet_width2x / frames;
-	char stylesheet[] = "images/sheet2.png";
-
 	HWND sysTrayHwnd;
 
 	// CONSOLE
@@ -84,37 +79,9 @@ int main(int argc, char** argv) {
 	freopen_s(&pFile, "conout$", "w", stdout);
 	freopen_s(&pFile, "conout$", "w", stderr);
 */
-	// ANIMATION WINDOW
-	sf::RenderWindow renderWindow(sf::VideoMode(220, 256), "Waifu Dance", sf::Style::None);
-	HWND hwnd = renderWindow.getSystemHandle();
-
-	// Transparent Window
-	MARGINS margins;
-	margins.cxLeftWidth = -1;
-
-	SetWindowLong(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
-	DwmExtendFrameIntoClientArea(hwnd, &margins);
-
-	// Keep on top
-	SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-
-	// Remove icon from taskbar
-	ITaskbarList* pTaskList = NULL;
-	HRESULT initRet = CoInitialize(NULL);
-	HRESULT createRet = CoCreateInstance(CLSID_TaskbarList, NULL, CLSCTX_INPROC_SERVER, IID_ITaskbarList, (LPVOID*)&pTaskList);
-
-	if (createRet == S_OK)
-	{
-		pTaskList->DeleteTab(hwnd);
-		pTaskList->Release();
-	}
-
-	CoUninitialize();
 
 	// SYSTEM TRAY
-
 	// Create window specifically for systray icon and pop up menu 
-	HICON appIcon = (HICON)LoadImage(NULL, L"icon.ico", IMAGE_ICON, 0, 0, LR_LOADFROMFILE);
 	HINSTANCE hInst = GetModuleHandle(NULL);
 	LPCTSTR szClassName = L"WaifuDance Menu";
 	MSG message;
@@ -158,21 +125,167 @@ int main(int argc, char** argv) {
 		NULL                 /* No Window Creation data */
 	);
 	
-	std::cout << GetLastError() << std::endl;
+	InitNotifyIconData(sysTrayHwnd);
 	ShowWindow(sysTrayHwnd, SW_SHOWDEFAULT);
+	UpdateWindow(sysTrayHwnd);
 
-	NOTIFYICONDATA niData;
-	ZeroMemory(&niData, sizeof(NOTIFYICONDATA));
+	std::thread animation_thread (displayAnimation);
+
+	while (GetMessage(&message, NULL, 0, 0))
+	{
+		TranslateMessage(&message);
+		DispatchMessage(&message);
+	}
+
+	done = 1;
+	animation_thread.join();
+
+	return (int)message.wParam;
+}
+
+/*  This function is called by the Windows function DispatchMessage()  */
+
+LRESULT CALLBACK WinProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+	if (message == WM_TASKBAR && !IsWindowVisible(hWnd))
+	{
+		return 0;
+	}
+
+	switch (message)                  /* handle the messages */
+	{
+	case WM_ACTIVATE:
+		Shell_NotifyIcon(NIM_ADD, &niData);
+		break;
+	case WM_CREATE:
+		
+		ShowWindow(hWnd, SW_HIDE);
+		Hmenu = CreatePopupMenu();
+		AppendMenu(Hmenu, MF_STRING, 100, TEXT("Close Application"));
+
+		break;
+
+	case WM_SYSCOMMAND:
+		/*In WM_SYSCOMMAND messages, the four low-order bits of the wParam parameter
+		are used internally by the system. To obtain the correct result when testing the value of wParam,
+		an application must combine the value 0xFFF0 with the wParam value by using the bitwise AND operator.*/
+
+		switch (wParam & 0xFFF0)
+		{
+		case SC_MINIMIZE:
+		case SC_CLOSE:
+			minimize(hWnd);
+			return 0;
+			break;
+		}
+		break;
 
 
-	niData.cbSize = sizeof(NOTIFYICONDATA);
-	niData.hWnd = sysTrayHwnd;
-	niData.uID = ID_TRAY_APP_ICON;
-	niData.hIcon = appIcon;
-	niData.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-	niData.uCallbackMessage = WM_TRAYICON;
+		// Our user defined WM_SYSICON message.
+	case WM_TRAYICON:
+	{
 
-	Shell_NotifyIcon(NIM_ADD, &niData);
+		switch (wParam)
+		{
+		case ID_TRAY_APP_ICON:
+			SetForegroundWindow(hWnd);
+
+			break;
+		}
+
+
+		if (lParam == WM_LBUTTONUP)
+		{
+			restore(hWnd);
+		}
+		else if (lParam == WM_RBUTTONDOWN)
+		{
+			// Get current mouse position.
+			POINT curPoint;
+			GetCursorPos(&curPoint);
+			SetForegroundWindow(hWnd);
+
+			// TrackPopupMenu blocks the app until TrackPopupMenu returns
+
+			UINT clicked = TrackPopupMenu(Hmenu, TPM_RETURNCMD | TPM_NONOTIFY, curPoint.x, curPoint.y, 0, hWnd, NULL);
+
+			const int IDM_EXIT = 100;
+
+			SendMessage(hWnd, WM_NULL, 0, 0); // send benign message to window to make sure the menu goes away.
+			if (clicked == IDM_EXIT)
+			{
+				// quit the application.
+				Shell_NotifyIcon(NIM_DELETE, &niData);
+				DestroyWindow(hWnd);
+				PostQuitMessage(0);
+			}
+		}
+	}
+	break;
+
+	// intercept the hittest message..
+	case WM_NCHITTEST:
+	{
+		UINT uHitTest = DefWindowProc(hWnd, WM_NCHITTEST, wParam, lParam);
+		if (uHitTest == HTCLIENT)
+			return HTCAPTION;
+		else
+			return uHitTest;
+	}
+
+	case WM_CLOSE:
+		minimize(hWnd);
+		return 0;
+		break;
+
+	case WM_DESTROY:
+
+		PostQuitMessage(0);
+		break;
+
+	}
+
+	return DefWindowProc(hWnd, message, wParam, lParam);
+}
+
+void displayAnimation() {
+	//configuration options
+	int animation = cirno_stepping;
+	int sprite_width = 220;
+	int sprite_length = 256;
+	int rate = 105;
+	int frames = 8;
+	int sheet_width = 880;
+	int sheet_width2x = sheet_width * 2;
+	int rectangle_left = sheet_width2x / frames;
+	char stylesheet[] = "images/sheet2.png";
+
+	// ANIMATION WINDOW
+	sf::RenderWindow renderWindow(sf::VideoMode(220, 256), "Waifu Dance", sf::Style::None);
+	HWND hwnd = renderWindow.getSystemHandle();
+
+	// Transparent Window
+	MARGINS margins;
+	margins.cxLeftWidth = -1;
+
+	SetWindowLong(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+	DwmExtendFrameIntoClientArea(hwnd, &margins);
+
+	// Keep on top
+	SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+
+	// Remove icon from taskbar
+	ITaskbarList* pTaskList = NULL;
+	HRESULT initRet = CoInitialize(NULL);
+	HRESULT createRet = CoCreateInstance(CLSID_TaskbarList, NULL, CLSCTX_INPROC_SERVER, IID_ITaskbarList, (LPVOID*)&pTaskList);
+
+	if (createRet == S_OK)
+	{
+		pTaskList->DeleteTab(hwnd);
+		pTaskList->Release();
+	}
+
+	CoUninitialize();
 
 	// RENDER LOOP 
 	sf::Event event;
@@ -186,13 +299,7 @@ int main(int argc, char** argv) {
 	bool grabbed = false;
 	sf::Vector2i grabbedOffset;
 
-	while (GetMessage(&message, NULL, 0, 0))
-	{
-		TranslateMessage(&message);
-		DispatchMessage(&message);
-	}
-	
-	while (renderWindow.isOpen()) {
+	while (renderWindow.isOpen() && !done) {
 		while (renderWindow.pollEvent(event)) {
 			if (event.type == sf::Event::EventType::Closed) {
 				renderWindow.close();
@@ -230,106 +337,29 @@ int main(int argc, char** argv) {
 		renderWindow.draw(sprite);
 		renderWindow.display();
 	}
-	
 }
 
-/*  This function is called by the Windows function DispatchMessage()  */
-
-LRESULT CALLBACK WinProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
+void minimize(HWND hWnd)
 {
-	if (message == WM_TASKBAR && !IsWindowVisible(hWnd))
-	{
-		return 0;
-	}
-
-	switch (message)                  /* handle the messages */
-	{
-	case WM_ACTIVATE:
-		break;
-	case WM_CREATE:
-		
-		ShowWindow(hWnd, SW_HIDE);
-		Hmenu = CreatePopupMenu();
-		AppendMenu(Hmenu, MF_STRING, 100, TEXT("Exit The Demo"));
-
-		break;
-
-	case WM_SYSCOMMAND:
-		/*In WM_SYSCOMMAND messages, the four low-order bits of the wParam parameter
-		are used internally by the system. To obtain the correct result when testing the value of wParam,
-		an application must combine the value 0xFFF0 with the wParam value by using the bitwise AND operator.*/
-
-		switch (wParam & 0xFFF0)
-		{
-		case SC_MINIMIZE:
-		case SC_CLOSE:
-			return 0;
-			break;
-		}
-		break;
+	// hide the main window
+	ShowWindow(hWnd, SW_HIDE);
+}
 
 
-		// Our user defined WM_SYSICON message.
-	case WM_TRAYICON:
-	{
+void restore(HWND hWnd)
+{
+	ShowWindow(hWnd, SW_SHOW);
+}
 
-		switch (wParam)
-		{
-		case ID_TRAY_APP_ICON:
-			SetForegroundWindow(hWnd);
+void InitNotifyIconData(HWND hWnd)
+{
+	ZeroMemory(&niData, sizeof(NOTIFYICONDATA));
 
-			break;
-		}
-
-
-		if (lParam == WM_LBUTTONUP)
-		{
-			break;
-		}
-		else if (lParam == WM_RBUTTONDOWN)
-		{
-			// Get current mouse position.
-			POINT curPoint;
-			GetCursorPos(&curPoint);
-			SetForegroundWindow(hWnd);
-
-			// TrackPopupMenu blocks the app until TrackPopupMenu returns
-
-			UINT clicked = TrackPopupMenu(Hmenu, TPM_RETURNCMD | TPM_NONOTIFY, curPoint.x, curPoint.y, 0, hWnd, NULL);
-
-
-
-			SendMessage(hWnd, WM_NULL, 0, 0); // send benign message to window to make sure the menu goes away.
-			if (clicked == 100)
-			{
-				// quit the application.
-				PostQuitMessage(0);
-			}
-		}
-	}
-	break;
-
-	// intercept the hittest message..
-	case WM_NCHITTEST:
-	{
-		UINT uHitTest = DefWindowProc(hWnd, WM_NCHITTEST, wParam, lParam);
-		if (uHitTest == HTCLIENT)
-			return HTCAPTION;
-		else
-			return uHitTest;
-	}
-
-	case WM_CLOSE:
-		return 0;
-		break;
-
-	case WM_DESTROY:
-
-		PostQuitMessage(0);
-		break;
-
-	}
-
-	return DefWindowProc(hWnd, message, wParam, lParam);
+	niData.cbSize = sizeof(NOTIFYICONDATA);
+	niData.hWnd = hWnd;
+	niData.uID = ID_TRAY_APP_ICON;
+	niData.hIcon = appIcon;
+	niData.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+	niData.uCallbackMessage = WM_TRAYICON;
 }
 
