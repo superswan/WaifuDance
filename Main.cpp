@@ -11,10 +11,29 @@
 #define ID_TRAY_EXIT_CONTEXT_MENU_ITEM  3000
 #define WM_TRAYICON ( WM_USER + 1 )
 
+#define IDM_ANIM_CIRNO_1 1
+#define IDM_ANIM_CIRNO_2 2
+#define IDM_ANIM_CIRNO_3 3
+#define IDM_ANIM_CIRNO_4 4
+#define IDM_ANIM_CIRNO_5 5
+#define IDM_ANIM_CIRNO_6 6
+
+HINSTANCE hInst;
 UINT WM_TASKBAR = 0;
 NOTIFYICONDATA niData;
 HICON appIcon = (HICON)LoadImage(NULL, L"icon.ico", IMAGE_ICON, 0, 0, LR_LOADFROMFILE);
-HMENU Hmenu;
+HMENU hMenu;
+HMENU hMenubar;
+HMENU hAnimSelect;
+
+// Animation thread critical section
+typedef struct _SFML_DATA {
+	CRITICAL_SECTION cs;
+	std::thread animation_thread;
+	int animation;
+} SFML_DATA, * PSFML_DATA;
+SFML_DATA sfmldata;
+PSFML_DATA psfmldata = &sfmldata;
 
 bool done = 0;
 
@@ -66,6 +85,7 @@ void displayAnimation();
 void minimize(HWND hWnd);
 void restore(HWND hWnd);
 void InitNotifyIconData(HWND hWnd);
+//void createMenus(HWND hWnd);
 
 int main(int argc, char** argv) {
 	HWND sysTrayHwnd;
@@ -80,9 +100,14 @@ int main(int argc, char** argv) {
 	freopen_s(&pFile, "conout$", "w", stderr);
 */
 
+
+	InitializeCriticalSection(&sfmldata.cs);
+	sfmldata.animation = cirno_waiting;
+
+	
 	// SYSTEM TRAY
 	// Create window specifically for systray icon and pop up menu 
-	HINSTANCE hInst = GetModuleHandle(NULL);
+	hInst = GetModuleHandle(NULL);
 	LPCTSTR szClassName = L"WaifuDance Menu";
 	MSG message;
 	WNDCLASSEX wincl;
@@ -109,7 +134,6 @@ int main(int argc, char** argv) {
 		return 0;
 	}
 	
-
 	sysTrayHwnd = CreateWindowEx(
 		0,                   /* Extended possibilites for variation */
 		szClassName,         /* Classname */
@@ -117,28 +141,28 @@ int main(int argc, char** argv) {
 		WS_OVERLAPPEDWINDOW, /* default window */
 		CW_USEDEFAULT,       /* Windows decides the position */
 		CW_USEDEFAULT,       /* where the window ends up on the screen */
-		544,                 /* The programs width */
-		375,                 /* and height in pixels */
+		544,                 /* width */
+		375,                 /* height */
 		HWND_DESKTOP,        /* The window is a child-window to desktop */
-		NULL,                /* No menu */
+		NULL,                /* Menu will be added later */
 		hInst,				 /* Program Instance handler */
-		NULL                 /* No Window Creation data */
+		psfmldata            /* Pass pointer to SFML_DATA struct to change animation from window */
 	);
 	
 	InitNotifyIconData(sysTrayHwnd);
 	ShowWindow(sysTrayHwnd, SW_SHOWDEFAULT);
 	UpdateWindow(sysTrayHwnd);
 
-	std::thread animation_thread (displayAnimation);
-
+	psfmldata->animation_thread = std::thread(displayAnimation);
+	
+	// Message Loop
 	while (GetMessage(&message, NULL, 0, 0))
 	{
 		TranslateMessage(&message);
 		DispatchMessage(&message);
 	}
 
-	done = 1;
-	animation_thread.join();
+	psfmldata->animation_thread.join();
 
 	return (int)message.wParam;
 }
@@ -156,20 +180,80 @@ LRESULT CALLBACK WinProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	{
 	case WM_ACTIVATE:
 		Shell_NotifyIcon(NIM_ADD, &niData);
-		break;
 	case WM_CREATE:
-		
 		ShowWindow(hWnd, SW_HIDE);
-		Hmenu = CreatePopupMenu();
-		AppendMenu(Hmenu, MF_STRING, 100, TEXT("Close Application"));
+
+		// MENU
+		hMenu = CreatePopupMenu();
+		AppendMenu(hMenu, MF_STRING, 100, TEXT("Close Application"));
+
+		hMenubar = CreateMenu();
+		hAnimSelect = CreateMenu();
+
+		AppendMenuW(hAnimSelect, MF_STRING, IDM_ANIM_CIRNO_1, L"&Waiting");
+		AppendMenuW(hAnimSelect, MF_STRING, IDM_ANIM_CIRNO_2, L"&Stepping");
+		AppendMenuW(hAnimSelect, MF_STRING, IDM_ANIM_CIRNO_3, L"&Jumping");
+		AppendMenuW(hAnimSelect, MF_STRING, IDM_ANIM_CIRNO_4, L"&Waving");
+		AppendMenuW(hAnimSelect, MF_STRING, IDM_ANIM_CIRNO_5, L"&Hula");
+		AppendMenuW(hAnimSelect, MF_STRING, IDM_ANIM_CIRNO_6, L"&Windmill");
+
+		CheckMenuRadioItem(hAnimSelect, IDM_ANIM_CIRNO_1,
+								  IDM_ANIM_CIRNO_6,
+								  IDM_ANIM_CIRNO_1,
+			MF_BYCOMMAND);
+		
+		AppendMenuW(hMenubar, MF_POPUP, (UINT_PTR)hAnimSelect, L"&Animation");
+		SetMenu(hWnd, hMenubar);
 
 		break;
+	case WM_COMMAND:
+		switch (LOWORD(wParam)) {
+		case IDM_ANIM_CIRNO_1:
+			EnterCriticalSection(&psfmldata->cs);
+			psfmldata->animation = cirno_waiting;
+			LeaveCriticalSection(&psfmldata->cs);
+			CheckMenuRadioItem(hAnimSelect, IDM_ANIM_CIRNO_1, IDM_ANIM_CIRNO_6, 
+				IDM_ANIM_CIRNO_1, MF_BYCOMMAND);
+			break;
+		case IDM_ANIM_CIRNO_2:
+			EnterCriticalSection(&psfmldata->cs);
+			psfmldata->animation = cirno_stepping;
+			LeaveCriticalSection(&psfmldata->cs);
+			CheckMenuRadioItem(hAnimSelect, IDM_ANIM_CIRNO_1, IDM_ANIM_CIRNO_6, 
+				IDM_ANIM_CIRNO_2, MF_BYCOMMAND);
+			break;
+		case IDM_ANIM_CIRNO_3:
+			EnterCriticalSection(&psfmldata->cs);
+			psfmldata->animation = cirno_jumping;
+			LeaveCriticalSection(&psfmldata->cs);
+			CheckMenuRadioItem(hAnimSelect, IDM_ANIM_CIRNO_1, IDM_ANIM_CIRNO_6, 
+				IDM_ANIM_CIRNO_3, MF_BYCOMMAND);
+			break;
+		case IDM_ANIM_CIRNO_4:
+			EnterCriticalSection(&psfmldata->cs);
+			psfmldata->animation = cirno_waving;
+			LeaveCriticalSection(&psfmldata->cs);
+			CheckMenuRadioItem(hAnimSelect, IDM_ANIM_CIRNO_1, IDM_ANIM_CIRNO_6, 
+				IDM_ANIM_CIRNO_4, MF_BYCOMMAND);
+			break;
+		case IDM_ANIM_CIRNO_5:
+			EnterCriticalSection(&psfmldata->cs);
+			psfmldata->animation = cirno_hula;
+			LeaveCriticalSection(&psfmldata->cs);
+			CheckMenuRadioItem(hAnimSelect, IDM_ANIM_CIRNO_1, IDM_ANIM_CIRNO_6, 
+				IDM_ANIM_CIRNO_5, MF_BYCOMMAND);
+			break;
+		case IDM_ANIM_CIRNO_6:
+			EnterCriticalSection(&psfmldata->cs);
+			psfmldata->animation = cirno_windmill;
+			LeaveCriticalSection(&psfmldata->cs);
+			CheckMenuRadioItem(hAnimSelect, IDM_ANIM_CIRNO_1, IDM_ANIM_CIRNO_6, 
+				IDM_ANIM_CIRNO_6, MF_BYCOMMAND);
+			break;
+		}
+
 
 	case WM_SYSCOMMAND:
-		/*In WM_SYSCOMMAND messages, the four low-order bits of the wParam parameter
-		are used internally by the system. To obtain the correct result when testing the value of wParam,
-		an application must combine the value 0xFFF0 with the wParam value by using the bitwise AND operator.*/
-
 		switch (wParam & 0xFFF0)
 		{
 		case SC_MINIMIZE:
@@ -207,7 +291,7 @@ LRESULT CALLBACK WinProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
 			// TrackPopupMenu blocks the app until TrackPopupMenu returns
 
-			UINT clicked = TrackPopupMenu(Hmenu, TPM_RETURNCMD | TPM_NONOTIFY, curPoint.x, curPoint.y, 0, hWnd, NULL);
+			UINT clicked = TrackPopupMenu(hMenu, TPM_RETURNCMD | TPM_NONOTIFY, curPoint.x, curPoint.y, 0, hWnd, NULL);
 
 			const int IDM_EXIT = 100;
 
@@ -239,7 +323,7 @@ LRESULT CALLBACK WinProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		break;
 
 	case WM_DESTROY:
-
+		done = 1;
 		PostQuitMessage(0);
 		break;
 
@@ -250,7 +334,7 @@ LRESULT CALLBACK WinProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 
 void displayAnimation() {
 	//configuration options
-	int animation = cirno_stepping;
+	int animation = psfmldata->animation;
 	int sprite_width = 220;
 	int sprite_length = 256;
 	int rate = 105;
@@ -331,6 +415,11 @@ void displayAnimation() {
 			}
 
 			clock.restart();
+		}
+
+		if (psfmldata->animation != animation) {
+			animation = psfmldata->animation;
+			rectSource.top = animation;
 		}
 
 		renderWindow.clear(sf::Color::Transparent);
